@@ -264,6 +264,7 @@ static void bench_chase_lev_thread_func(void *arg)
     //wait to run
     while(*thread->run_test == 0); 
     
+    CL_QUEUE_ATOMIC(isize) dummy = 0;
     //run for as long as we can
     while(atomic_load_explicit(thread->run_test, memory_order_relaxed) == 1)
     {
@@ -274,8 +275,8 @@ static void bench_chase_lev_thread_func(void *arg)
         for(isize i = 0; i < thread->slowdown; i++)
         {
             //_mm_pause();
-            volatile isize a = atomic_fetch_add_explicit(thread->run_test, 1, memory_order_relaxed);
-            //atomic_load_explicit(&a, memory_order_relaxed);
+            volatile isize a = atomic_load_explicit(thread->run_test, memory_order_relaxed);
+            //atomic_fetch_add_explicit(&dummy, 1, memory_order_relaxed);
         }
     }
 
