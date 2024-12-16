@@ -252,6 +252,7 @@ typedef struct Bench_CL_Thread {
     isize ops;
     isize tries;
     isize slowdown;
+    isize loops;
 } Bench_CL_Thread;
 
 static void bench_chase_lev_thread_func(void *arg)
@@ -272,9 +273,8 @@ static void bench_chase_lev_thread_func(void *arg)
 
         for(isize i = 0; i < thread->slowdown; i++)
         {
-            _mm_pause();
-            //CL_QUEUE_ATOMIC(int) a = 0;
-            //atomic_fetch_add_explicit(&a, 1, memory_order_relaxed);
+            //_mm_pause();
+            volatile isize a = atomic_fetch_add_explicit(thread->run_test, 1, memory_order_relaxed);
             //atomic_load_explicit(&a, memory_order_relaxed);
         }
     }
