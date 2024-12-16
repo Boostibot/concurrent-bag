@@ -375,8 +375,8 @@ static void bench_lc_pool_asymetric_thread_func(void *arg)
     if(thread->is_push)
     {
         isize item = 0;
-        for(; atomic_load_explicit(thread->run_test, memory_order_relaxed) == 1; iters += 1)
-            ops += lc_pool_push(pool, handle, &item, sizeof item);
+        for(; atomic_load_explicit(thread->run_test, memory_order_relaxed) == 1;)
+            lc_pool_push(pool, handle, &item, sizeof item);
     }
     else
     {

@@ -135,9 +135,13 @@ CL_QUEUE_API void cl_queue_init(CL_Queue* queue, isize item_size, isize max_capa
 CL_QUEUE_API_INLINE void* _cl_queue_slot(CL_Queue_Block* block, uint64_t i, isize item_size)
 {
     uint64_t mapped = i & block->mask;
-    if(1)
+    if(0)
     {
-        assert(mapped <= block->mask + 1);
+        //We can try decreasing the ammount of falshe sharing by instead 
+        // of accessing items roughly in order
+        //    0, 1, 2, 3, 4, 5...
+        // we instead access in order
+        //    0, 16, 32, 48, 1, 17, 33, 49, 2...
         //before: mappped = [    high   ][ mid ][ lo ]
         //                  <-----58----><--4--><-2-->
         //after: mappped =  [    high   ][ lo ][ mid ]
@@ -145,7 +149,7 @@ CL_QUEUE_API_INLINE void* _cl_queue_slot(CL_Queue_Block* block, uint64_t i, isiz
         mapped = (mapped & ~0x3Full)
             | (mapped & 0x3ull) << 4
             | (mapped & 0x3Cull) >> 2;
-        assert(mapped <= block->mask + 1);
+        ASSERT(mapped <= block->mask + 1);
     }
 
     uint8_t* data = (uint8_t*) (void*) (block + 1);

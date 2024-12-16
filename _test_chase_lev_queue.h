@@ -242,6 +242,151 @@ static void test_chase_lev_queue(double time)
     printf("test_chase_lev done!\n");
 }
 
+
+typedef struct Bench_CL_Thread {
+    CL_QUEUE_ATOMIC(isize)* started; 
+    CL_QUEUE_ATOMIC(isize)* finished; 
+    CL_QUEUE_ATOMIC(isize)* run_test; 
+    CL_Queue* queue;
+
+    isize ops;
+    isize tries;
+    isize slowdown;
+} Bench_CL_Thread;
+
+static void bench_chase_lev_thread_func(void *arg)
+{
+    Bench_CL_Thread* thread = (Bench_CL_Thread*) arg;
+    //notify we started
+    atomic_fetch_add(thread->started, 1);
+
+    //wait to run
+    while(*thread->run_test == 0); 
+    
+    //run for as long as we can
+    while(atomic_load_explicit(thread->run_test, memory_order_relaxed) == 1)
+    {
+        isize val = 0;
+        thread->ops += cl_queue_pop(thread->queue, &val, sizeof(isize));
+        thread->tries += 1;
+
+        for(isize i = 0; i < thread->slowdown; i++)
+        {
+            _mm_pause();
+            //CL_QUEUE_ATOMIC(int) a = 0;
+            //atomic_fetch_add_explicit(&a, 1, memory_order_relaxed);
+            //atomic_load_explicit(&a, memory_order_relaxed);
+        }
+    }
+
+    atomic_fetch_add(thread->finished, 1);
+}
+
+typedef struct Bench_CL_Result {
+    double time;
+    uint64_t pop_tries;
+    uint64_t pop_ops;
+    uint64_t push_ops;
+    uint64_t push_tries;
+    uint64_t capacity;
+} Bench_CL_Result;
+
+static Bench_CL_Result bench_chase_lev_single(isize reserve_size, isize consumer_count, double time, isize slowdown)
+{
+    CL_Queue queue = {0};
+    cl_queue_init(&queue, sizeof(isize), -1);
+    cl_queue_reserve(&queue, reserve_size);
+
+    CL_QUEUE_ATOMIC(isize) started = 0;
+    CL_QUEUE_ATOMIC(isize) finished = 0;
+    CL_QUEUE_ATOMIC(isize) run_test = 0;
+    
+    //start all threads
+    enum {MAX_THREADS = 64};
+    Bench_CL_Thread threads[MAX_THREADS] = {0};
+    for(isize i = 0; i < consumer_count; i++)
+    {
+        threads[i].queue = &queue;
+        threads[i].started = &started;
+        threads[i].finished = &finished;
+        threads[i].run_test = &run_test;
+        threads[i].slowdown = slowdown;
+
+        //run the test func in separate thread in detached state
+        test_cl_launch_thread(bench_chase_lev_thread_func, &threads[i]);
+    }
+    
+    isize push_ops = 0;
+    //run test
+    {
+        while(started != consumer_count);
+        run_test = 1;
+
+        isize deadline = clock() + (isize)(time*CLOCKS_PER_SEC);
+        for(; clock() < deadline; push_ops++)
+            cl_queue_push(&queue, &push_ops, sizeof(isize));
+
+        run_test = 2;
+        while(finished != consumer_count);
+    }
+    
+    Bench_CL_Result res = {0};
+    res.capacity = cl_queue_capacity(&queue);
+    res.time = (double)(isize)(time*CLOCKS_PER_SEC)/CLOCKS_PER_SEC;
+    res.push_ops = push_ops;
+    res.push_tries = push_ops;
+    for(isize i = 0; i < consumer_count; i++) {
+        res.pop_ops += threads[i].ops;
+        res.pop_tries += threads[i].tries;
+    }
+
+    cl_queue_deinit(&queue);
+    return res;
+}
+
+static Bench_CL_Result bench_chase_lev_repeated(isize reserve_size, isize consumer_count, double total_time, isize slowdown, isize repeats)
+{
+    double time = total_time / repeats;
+    Bench_CL_Result sum = {0}; 
+    for(isize i = 0; i < repeats; i++)
+    {
+        Bench_CL_Result res = bench_chase_lev_single(reserve_size, consumer_count, time, slowdown);
+        sum.time += res.time;
+        sum.pop_ops += res.pop_ops;
+        sum.pop_tries += res.pop_tries;
+        sum.push_ops += res.push_ops;
+        sum.push_tries += res.push_tries;
+        if(sum.capacity < res.capacity)
+            sum.capacity = res.capacity;
+    }
+
+    return sum;
+}
+
+void bench_chase_lev(double time, isize max_threads) 
+{
+    isize reserve_count = 1024*1024*2;
+    isize repeats = 10;
+    isize slowdowns[4] = {0, 5, 10, 15};
+
+    for(isize slow_i = 0; slow_i < 4; slow_i ++)
+    {
+        printf("slowdown: %lli \n", slowdowns[slow_i]);
+        for(isize i = 2; i <= max_threads; i+= 2)
+        {
+            Bench_CL_Result res = bench_chase_lev_repeated(reserve_count, i-1, time, slowdowns[slow_i], repeats);
+            printf("chase_lev (pop ): threads:%2lli throughput:%7.2lf millions/s total:%10lli (%4.2lf success rate) \n", i, (double) res.pop_ops/(res.time*1e6), res.pop_ops, (double)res.pop_ops/res.pop_tries);
+            printf("chase_lev (push): threads:%2lli throughput:%7.2lf millions/s total:%10lli (%4.2lf success rate) ", i, (double) res.push_ops/(res.time*1e6), res.push_ops, (double)res.push_ops/res.push_tries);
+
+            if(reserve_count == res.capacity)
+                printf("\n");
+            else
+                printf(" reserved:%lli Mebi max_capacity:%lli Mebi \n", reserve_count/(1024*1024), res.capacity/(1024*1024));
+        }
+    }
+}
+
+
 //Helper functions IMPLS ================
 static void test_cl_buffer_push(Test_CL_Buffer* buffer, isize* val, isize count) 
 {
@@ -284,6 +429,7 @@ static int test_cl_isize_comp_func(const void* a, const void* b)
 
         _beginthread(func, 0, context);
     }
+
 #else
     #include <pthread.h>
     static void* test_chase_lev_launch_caster(void* func_and_context)
