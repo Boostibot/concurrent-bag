@@ -181,7 +181,7 @@ CL_QUEUE_API CL_Queue_Block* _cl_queue_reserve(CL_Queue* queue, isize to_size)
         {
             uint64_t t = atomic_load(&queue->top);
             uint64_t b = atomic_load(&queue->bot);
-            for(uint64_t i = t; i < b; i++)
+            for(uint64_t i = t; (int64_t) (i - b) < 0; i++) //i < b
                 memcpy(_cl_queue_slot(new_block, i, item_size), _cl_queue_slot(old_block, i, item_size), item_size);
         }
 

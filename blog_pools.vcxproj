@@ -134,8 +134,10 @@
     <ClInclude Include="chase_lev_queue32.h" />
     <ClInclude Include="lc_pool.h" />
     <ClInclude Include="link_pool.h" />
+    <ClInclude Include="k_queue.h" />
     <ClInclude Include="sync_stacks.h" />
     <ClInclude Include="_test_chase_lev_queue.h" />
+    <ClInclude Include="_test_k_queue.h" />
     <ClInclude Include="_test_pools.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -41,5 +41,11 @@
     <ClInclude Include="link_pool.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="k_queue.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="_test_k_queue.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
