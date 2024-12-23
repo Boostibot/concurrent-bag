@@ -21,6 +21,8 @@ typedef struct K_Queue_Local {
     K_Queue_Block* block;
     uint64_t rand; 
     uint64_t iter; //[0, chunk_size = K)
+
+    uint64_t reloads;
 } K_Queue_Local;
 
 typedef struct K_Queue {
@@ -131,7 +133,7 @@ K_Queue_Block* _k_queue_make_block(K_Queue* pool, K_Queue_Block* old_block, isiz
 }
 
 CL_QUEUE_INLINE_NEVER
-K_Queue_Block* _k_queue_push_grow(K_Queue* pool, K_Queue_Local* local_ptr, isize item_size)
+void _k_queue_push_grow(K_Queue* pool, K_Queue_Local* local_ptr, isize item_size)
 {
     //make new block
     K_Queue_Block* old_block = local_ptr->block;
@@ -139,46 +141,43 @@ K_Queue_Block* _k_queue_push_grow(K_Queue* pool, K_Queue_Local* local_ptr, isize
     
     old_block->next = new_block;
     atomic_store_explicit(&pool->block, new_block, memory_order_release);
-    return new_block;
+    local_ptr->block = new_block;
+    local_ptr->mask = new_block->mask;
 }
 
-//in push local is not an estimates but exact - well appart from head which is an estimate
-bool k_queue_push(K_Queue* pool, K_Queue_Local* local_ptr, const void* item, isize item_size)
+__forceinline
+bool k_queue_push(K_Queue* pool, K_Queue_Local* local, const void* item, isize item_size)
 {
-    K_Queue_Local local = *local_ptr;
-
+    uint64_t min_head = local->tail - local->mask - 1;
     //if full reload the head estimate
-    if(local.head == local.tail - local.mask - 1)
+    if(local->head == min_head)
     {
-        local.head = atomic_load_explicit(&pool->head, memory_order_relaxed);
-        local_ptr->head = local.head;
+        local->reloads += 1;
+        local->head = atomic_load_explicit(&pool->head, memory_order_relaxed);
         //if still full then really is full grow.
-        if(local.head == local.tail - local.mask - 1)
-        {
-            local.block = _k_queue_push_grow(pool, local_ptr, item_size);
-            local.mask = local.block->mask; 
-            local_ptr->block = local.block;
-            local_ptr->mask = local.mask;
-        }
+        if(local->head == min_head)
+            _k_queue_push_grow(pool, local, item_size);
     }
 
     //store and update shared structures
-    K_Queue_Block* block = local.block;
-    SPMC_Slot slot = _k_queue_slot(local.block, local.mask, local.tail, item_size);
-
+    K_Queue_Block* block = local->block;
+    uint64_t mask = local->mask;
+    uint64_t tail = local->tail;
+    uint64_t gen = local->gen;
+    SPMC_Slot slot = _k_queue_slot(local->block, mask, tail, item_size);
     memcpy(slot.item, item, item_size);
     
     //if we wrapped around the queue then increase generation
-    if(((local.tail + 1) & local.mask) == 0)
+    if(((tail + 1) & mask) == 0)
     {
-        local_ptr->gen = local.gen + 1;
-        atomic_store_explicit(&block->gen, local.gen + 1, memory_order_relaxed);
+        local->gen = gen + 1;
+        atomic_store_explicit(&block->gen, gen + 1, memory_order_relaxed);
     }
 
-    atomic_store_explicit(&block->tail, local.tail + 1, memory_order_relaxed);
-    atomic_store_explicit(slot.gen, (local.gen << 1) | 1, memory_order_release); //release!
+    atomic_store_explicit(&block->tail, tail + 1, memory_order_relaxed);
+    atomic_store_explicit(slot.gen, (gen << 1) | 1, memory_order_release); //release!
     
-    local_ptr->tail = local.tail + 1;
+    local->tail = tail + 1;
     return true;
 }
 
@@ -218,45 +217,45 @@ bool k_queue_pop_back(K_Queue* pool, K_Queue_Local* local_ptr, void* item, isize
     return true;
 }
 
-bool k_queue_pop(K_Queue* pool, K_Queue_Local* local_ptr, void* item, isize item_size, uint64_t chunk_size)
+__forceinline
+bool k_queue_pop(K_Queue* pool, K_Queue_Local* local, void* item, isize item_size, uint64_t chunk_size)
 {
-    K_Queue_Local local = *local_ptr;
     for(;;) {
         //we iterate one block. Just one - if there have been many many pushes 
         // we dont want to have to scan everything just to catch up.
         //Instead after one block we give up and ask whats the current state of things
-        uint64_t sgen = (local.gen << 1) | 1;
+        uint64_t sgen = (local->gen << 1) | 1;
         for(uint64_t iter = 0; iter < chunk_size; iter ++)
         {
-            uint64_t i = local.head + (local.rand + iter) % chunk_size;
-            SPMC_Slot slot = _k_queue_slot(local.block, local.mask, i, item_size);
+            uint64_t i = local->head + (local->rand + iter) % chunk_size;
+            SPMC_Slot slot = _k_queue_slot(local->block, local->mask, i, item_size);
             uint64_t slot_gen = atomic_load_explicit(slot.gen, memory_order_relaxed);
             if((int64_t) (sgen - slot_gen) >= 0 && (slot_gen & 1) == 1)
             {
                 atomic_thread_fence(memory_order_acquire);
                 memcpy(item, slot.item, item_size);
-                #ifndef NDEBUG
-                    memset(slot.item, -1, item_size);
-                #endif
+                    //memset(slot.item, -1, item_size);
 
-                if(atomic_compare_exchange_strong_explicit(slot.gen, &slot_gen, local.gen << 1, memory_order_relaxed, memory_order_relaxed))
+                if(atomic_compare_exchange_strong_explicit(slot.gen, &slot_gen, local->gen << 1, memory_order_relaxed, memory_order_relaxed))
                     return true;
             }
         }
         
-        int retry_counter = 0;
-        K_Queue_Local old_local = local;
-        local.head = atomic_load_explicit(&pool->head, memory_order_relaxed);
+        isize retry_counter = 0;
+        uint64_t old_head = local->head;
+        uint64_t old_gen = local->gen;
+
+        local->head = atomic_load_explicit(&pool->head, memory_order_relaxed);
         load_again:
-        local.block = atomic_load_explicit(&pool->block, memory_order_relaxed);
-        local.tail = atomic_load_explicit(&local.block->tail, memory_order_relaxed);
-        local.gen = atomic_load_explicit(&local.block->gen, memory_order_relaxed);
-        local.mask = local.block->mask;
-        local.iter = 0;
+        local->block = atomic_load_explicit(&pool->block, memory_order_relaxed);
+        local->tail = atomic_load_explicit(&local->block->tail, memory_order_relaxed);
+        local->gen = atomic_load_explicit(&local->block->gen, memory_order_relaxed);
+        local->mask = local->block->mask;
+        local->reloads += 1;
         
         //if block reallocated and we read the old block and new head (other thread popped) then we could have head > tail.
         // In that case we just put down barrier and try again.
-        if((int64_t) (local.head - local.tail) > 0)
+        if((int64_t) (local->head - local->tail) > 0)
         {
             ASSERT(retry_counter++ == 0, "Must not get stuck in a cycle");
             atomic_thread_fence(memory_order_seq_cst);
@@ -264,26 +263,21 @@ bool k_queue_pop(K_Queue* pool, K_Queue_Local* local_ptr, void* item, isize item
         }
 
         //if this really is the last chunk
-        if(local.head == old_local.head)
+        if(local->head == old_head)
         {
             //we scanned the full chunk - try moving the head forward
-            if((int64_t) (local.tail - local.head) >= (int64_t) chunk_size)
+            if((int64_t) (local->tail - local->head) >= (int64_t) chunk_size)
             {
-                if(atomic_compare_exchange_strong_explicit(&pool->head, &local.head, local.head + chunk_size, memory_order_relaxed, memory_order_relaxed))
-                    local.head = local.head + chunk_size;
+                if(atomic_compare_exchange_strong_explicit(&pool->head, &local->head, local->head + chunk_size, memory_order_relaxed, memory_order_relaxed))
+                    local->head += chunk_size;
                 else
-                    local.head = atomic_load_explicit(&pool->head, memory_order_relaxed);
+                    local->head = atomic_load_explicit(&pool->head, memory_order_relaxed);
             }
 
             //if there were no pushes and there is no space at all then we are canonically empty
-            uint64_t scanned_to = old_local.head + chunk_size;
-            if(local.gen == old_local.gen && (int64_t) (scanned_to - local.tail) > 0)
-            {
-                *local_ptr = local;
+            uint64_t scanned_to = old_head + chunk_size;
+            if(local->gen == old_gen && (int64_t) (scanned_to - local->tail) > 0)
                 return false;
-            }
         }
-
-        *local_ptr = local;
     }
 }

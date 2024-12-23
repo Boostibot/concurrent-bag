@@ -404,6 +404,12 @@ static void test_cl_buffer_push(Test_CL_Buffer* buffer, isize* val, isize count)
     buffer->count += count;
 }
 
+static void test_cl_buffer_deinit(Test_CL_Buffer* buffer)
+{
+    free(buffer->data);
+    memset(buffer, 0, sizeof *buffer);
+}
+
 static int test_cl_isize_comp_func(const void* a, const void* b)
 {
     isize x = *(const isize*) a;

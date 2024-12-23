@@ -40,7 +40,8 @@ void test_lc_pool_sequential(isize count)
     qsort(buffer.data, buffer.count, sizeof(isize), test_cl_isize_comp_func);
     for(isize i = 0; i < (isize) count; i++)
         TEST(buffer.data[i] == i);
-
+        
+    test_cl_buffer_deinit(&buffer);
     lc_pool_deinit(&pool);
 }
 
