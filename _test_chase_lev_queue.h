@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chase_lev_queue.h"
+//#include "chase_lev_queue.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -101,6 +102,7 @@ typedef struct Test_CL_Thread {
 static int  test_cl_isize_comp_func(const void* a, const void* b);
 static void test_cl_launch_thread(void (*func)(void*), void* context);
 static void test_cl_buffer_push(Test_CL_Buffer* buffer, isize* val, isize count);
+int64_t test_cl_clock_ns();
 
 static void test_chase_lev_producer_consumers_thread_func(void *arg)
 {
@@ -242,13 +244,15 @@ static void test_chase_lev_queue(double time)
     printf("test_chase_lev done!\n");
 }
 
-
 typedef struct Bench_CL_Thread {
+    alignas(64)
     CL_QUEUE_ATOMIC(isize)* started; 
     CL_QUEUE_ATOMIC(isize)* finished; 
     CL_QUEUE_ATOMIC(isize)* run_test; 
+    CL_QUEUE_ATOMIC(isize)* deadline; 
     CL_Queue* queue;
 
+    isize till;
     isize ops;
     isize tries;
     isize slowdown;
@@ -264,19 +268,18 @@ static void bench_chase_lev_thread_func(void *arg)
     //wait to run
     while(*thread->run_test == 0); 
     
-    CL_QUEUE_ATOMIC(isize) dummy = 0;
+    isize deadline = atomic_load_explicit(thread->deadline, memory_order_relaxed);
+    //CL_QUEUE_ATOMIC(isize) dummy = 0;
     //run for as long as we can
-    while(atomic_load_explicit(thread->run_test, memory_order_relaxed) == 1)
+    while(test_cl_clock_ns() < deadline)
     {
         isize val = 0;
         thread->ops += cl_queue_pop(thread->queue, &val, sizeof(isize));
         thread->tries += 1;
-
+        
         for(isize i = 0; i < thread->slowdown; i++)
         {
-            //_mm_pause();
-            volatile isize a = atomic_load_explicit(thread->run_test, memory_order_relaxed);
-            //atomic_fetch_add_explicit(&dummy, 1, memory_order_relaxed);
+            _mm_pause();
         }
     }
 
@@ -300,6 +303,7 @@ static Bench_CL_Result bench_chase_lev_single(isize reserve_size, isize consumer
 
     CL_QUEUE_ATOMIC(isize) started = 0;
     CL_QUEUE_ATOMIC(isize) finished = 0;
+    CL_QUEUE_ATOMIC(isize) deadline = 0;
     CL_QUEUE_ATOMIC(isize) run_test = 0;
     
     //start all threads
@@ -311,6 +315,7 @@ static Bench_CL_Result bench_chase_lev_single(isize reserve_size, isize consumer
         threads[i].started = &started;
         threads[i].finished = &finished;
         threads[i].run_test = &run_test;
+        threads[i].deadline = &deadline;
         threads[i].slowdown = slowdown;
 
         //run the test func in separate thread in detached state
@@ -321,10 +326,12 @@ static Bench_CL_Result bench_chase_lev_single(isize reserve_size, isize consumer
     //run test
     {
         while(started != consumer_count);
+
+        isize local_deadline = test_cl_clock_ns() + (isize)(time * 1000*1000*1000);
+        deadline = local_deadline; 
         run_test = 1;
 
-        isize deadline = clock() + (isize)(time*CLOCKS_PER_SEC);
-        for(; clock() < deadline; push_ops++)
+        for(; test_cl_clock_ns() < local_deadline; push_ops++)
             cl_queue_push(&queue, &push_ops, sizeof(isize));
 
         run_test = 2;
@@ -333,7 +340,7 @@ static Bench_CL_Result bench_chase_lev_single(isize reserve_size, isize consumer
     
     Bench_CL_Result res = {0};
     res.capacity = cl_queue_capacity(&queue);
-    res.time = (double)(isize)(time*CLOCKS_PER_SEC)/CLOCKS_PER_SEC;
+    res.time = (double)(isize)(time*1000*1000*1000)/(1000*1000*1000);
     res.push_ops = push_ops;
     res.push_tries = push_ops;
     for(isize i = 0; i < consumer_count; i++) {
@@ -373,7 +380,7 @@ void bench_chase_lev(double time, isize max_threads)
     for(isize slow_i = 0; slow_i < 4; slow_i ++)
     {
         printf("slowdown: %lli \n", slowdowns[slow_i]);
-        for(isize i = 2; i <= max_threads; i+= 2)
+        for(isize i = 1; i <= max_threads; i+= 2)
         {
             Bench_CL_Result res = bench_chase_lev_repeated(reserve_count, i-1, time, slowdowns[slow_i], repeats);
             printf("chase_lev (pop ): threads:%2lli throughput:%7.2lf millions/s total:%10lli (%4.2lf success rate) \n", i, (double) res.pop_ops/(res.time*1e6), res.pop_ops, (double)res.pop_ops/res.pop_tries);
@@ -423,6 +430,19 @@ static int test_cl_isize_comp_func(const void* a, const void* b)
     static void test_cl_launch_thread(void (*func)(void*), void* context)
     {
          std::thread(func, context).detach();
+    }
+    #include <chrono>
+    int64_t test_cl_clock_ns()
+    {
+        using namespace std::chrono;
+        return duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count();
+    }
+
+    static void test_cl_sleep_thread(double seconds_val)
+    {
+        using namespace std::chrono;
+
+        std::this_thread::sleep_for(duration<double>(seconds_val));
     }
 #elif defined(_WIN32) || defined(_WIN64)
     #include <process.h>

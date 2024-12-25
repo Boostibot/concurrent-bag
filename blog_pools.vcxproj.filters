@@ -41,10 +41,19 @@
     <ClInclude Include="link_pool.h">
       <Filter>Source Files</Filter>
     </ClInclude>
-    <ClInclude Include="k_queue.h">
+    <ClInclude Include="state_arr_k_queue.h">
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="_test_k_queue.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="lazy_queue.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="temp.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="virtual_arr_k_queue.h">
       <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>

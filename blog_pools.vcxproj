@@ -132,10 +132,13 @@
   <ItemGroup>
     <ClInclude Include="chase_lev_queue.h" />
     <ClInclude Include="chase_lev_queue32.h" />
+    <ClInclude Include="lazy_queue.h" />
     <ClInclude Include="lc_pool.h" />
     <ClInclude Include="link_pool.h" />
-    <ClInclude Include="k_queue.h" />
+    <ClInclude Include="state_arr_k_queue.h" />
     <ClInclude Include="sync_stacks.h" />
+    <ClInclude Include="temp.h" />
+    <ClInclude Include="virtual_arr_k_queue.h" />
     <ClInclude Include="_test_chase_lev_queue.h" />
     <ClInclude Include="_test_k_queue.h" />
     <ClInclude Include="_test_pools.h" />
