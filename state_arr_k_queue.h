@@ -238,6 +238,14 @@ bool k_queue_pop(K_Queue* pool, K_Queue_Local* local, void* item, isize item_siz
 
                 if(atomic_compare_exchange_strong_explicit(slot.gen, &slot_gen, local->gen << 1, memory_order_relaxed, memory_order_relaxed))
                     return true;
+                else
+                    slot_gen = atomic_load_explicit(slot.gen, memory_order_relaxed);
+            }
+
+            if(slot_gen & 2)
+            {
+                K_Queue_Block* alt_block = local->block->next
+            
             }
         }
         
